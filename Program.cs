@@ -23,8 +23,8 @@ namespace CsRunner
             switch (command) {
                 case "run":
                     if (args.Length >= 2) {
-                        string file = args[1];
-                        LoadFile(file);
+                        string csharpSourceFile = args[1];
+                        RunCsharpFile(csharpSourceFile);
                     }
                     break;
                 case "compile":
@@ -32,26 +32,11 @@ namespace CsRunner
             }
         }
 
-        private static void LoadFile(string file)
-        {            
+        private static void RunCsharpFile(string file)
+        {
             string compiledName = Path.GetFileNameWithoutExtension(file);
 
             var syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText(file));
-
-            //* Need to get all of the usings here
-            var usings = syntaxTree.GetRoot().DescendantNodes()
-                .Where(node => node is UsingDirectiveSyntax)
-                .Select(node => ((UsingDirectiveSyntax)node).Name.ToString())
-                .ToList();
-
-            var allusings = syntaxTree.GetRoot().DescendantNodes()
-                .Where(node => node is UsingDirectiveSyntax)
-                .Select(node => {
-                    var n = ((UsingDirectiveSyntax)node).Name;
-                    var s = ((UsingDirectiveSyntax)node).Name.ToString();
-                    return s;
-                })
-                .ToList();
 
             //* Need to get the static Main() method here
             var methods = syntaxTree.GetRoot().DescendantNodes()
@@ -60,6 +45,7 @@ namespace CsRunner
 
             var mainMethod = methods.FirstOrDefault();
             string mainClassName = ((ClassDeclarationSyntax)mainMethod.Parent).Identifier.ValueText;
+
             bool hasMain = methods.Count() == 1;
 
             var classnames = syntaxTree.GetRoot().DescendantNodes()
@@ -67,44 +53,18 @@ namespace CsRunner
                 .Select(node => ((ClassDeclarationSyntax)node).Identifier.ValueText)
                 .ToList();
 
-            //string classname = classnames.FirstOrDefault();
-
             if (!hasMain || mainClassName == null) {
                 Console.Error.WriteLine("No Main() or no classname");
+                return;
             }
 
-            //* Should be only the referenced usings, plus mscorlib
-            var references2 = new List<MetadataReference>();
-
-            var coreAssembly = Assembly.Load("mscorlib.dll");
-            references2.Add(MetadataReference.CreateFromFile(coreAssembly.Location));
-            string codebase = Path.GetDirectoryName(coreAssembly.Location);
-
-            foreach (var u in usings) {
-                if (u != "System") {
-                    //var an = new AssemblyName { Name = u + ".dll", CodeBase = codebase };
-                    //var assembly = Assembly.Load(new AssemblyName { Name = u + ".dll", CodeBase = codebase });
-                    try {
-                        references2.Add(MetadataReference.CreateFromFile(Path.Combine(codebase, u + ".dll")));
-                    }
-                    catch { }
-                }
-            }
-
-            //* If there are no other references to System, do it here
-            if (references2.Count == 0) {
-                references2.Add(MetadataReference.CreateFromFile(typeof(object).Assembly.Location));
-            }
-
-            var references = new[] {
-                //* using System;
-                MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
-                //* using System.Linq;
-                MetadataReference.CreateFromFile(typeof(Enumerable).Assembly.Location)
-            };
+            var references = GetReferencesFromUsings(syntaxTree);
 
             var options = new CSharpCompilationOptions(OutputKind.ConsoleApplication);
-            var compilation = CSharpCompilation.Create(compiledName, new[] { syntaxTree }, references2, options);
+            var compilation = CSharpCompilation.Create(compiledName, new[] { syntaxTree }, references, options);
+            var model = compilation.GetSemanticModel(syntaxTree);
+            var classSymbol = model.GetDeclaredSymbol(((ClassDeclarationSyntax)mainMethod.Parent));
+            string qualifiedType = classSymbol.OriginalDefinition.ToString();
 
             using (var ms = new MemoryStream()) {
                 var result = compilation.Emit(ms);
@@ -121,16 +81,45 @@ namespace CsRunner
                 else {
                     ms.Seek(0, SeekOrigin.Begin);
                     var assembly = Assembly.Load(ms.ToArray());
-                    var type = assembly.GetType(mainClassName);
+                    var type = assembly.GetType(qualifiedType);
 
                     object obj = Activator.CreateInstance(type);
                     type.InvokeMember("Main",
                         BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.InvokeMethod,
                         null,
                         obj,
-                        null);
+                        Array.Empty<string>());
                 }
             }
+        }
+
+        private static List<MetadataReference> GetReferencesFromUsings(SyntaxTree syntaxTree)
+        {
+            //* Need to get all of the usings here
+            var usings = syntaxTree.GetRoot().DescendantNodes()
+                .Where(node => node is UsingDirectiveSyntax)
+                .Select(node => ((UsingDirectiveSyntax)node).Name.ToString())
+                .ToList();
+
+            //* Should be only the referenced usings, plus mscorlib
+            var references = new List<MetadataReference>();
+
+            //* Always load mscorlib (System)
+            var coreAssembly = Assembly.Load("mscorlib.dll");
+            references.Add(MetadataReference.CreateFromFile(coreAssembly.Location));
+            string codebase = Path.GetDirectoryName(coreAssembly.Location);
+
+            foreach (var u in usings) {
+                if (u != "System") {
+                    try {
+                        //* Some references are to classes that don't match 
+                        references.Add(MetadataReference.CreateFromFile(Path.Combine(codebase, u + ".dll")));
+                    }
+                    catch { }
+                }
+            }
+
+            return references;
         }
     }
 }
