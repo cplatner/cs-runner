@@ -9,6 +9,9 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace CsRunner
 {
+    /// <summary>
+    /// Run a C# file using a simple command line interface
+    /// </summary>
     public class CsRunner
     {
         public static void Main(string[] args)
@@ -28,6 +31,7 @@ namespace CsRunner
                     }
                     break;
                 case "compile":
+                    Console.Error.WriteLine("Not implemented");
                     break;
             }
         }
@@ -44,7 +48,7 @@ namespace CsRunner
                 .ToList();
 
             var mainMethod = methods.FirstOrDefault();
-            string mainClassName = ((ClassDeclarationSyntax)mainMethod.Parent).Identifier.ValueText;
+            string mainClassName = ((ClassDeclarationSyntax)mainMethod?.Parent).Identifier.ValueText;
 
             bool hasMain = methods.Count() == 1;
 
@@ -64,7 +68,7 @@ namespace CsRunner
             var compilation = CSharpCompilation.Create(compiledName, new[] { syntaxTree }, references, options);
             var model = compilation.GetSemanticModel(syntaxTree);
             var classSymbol = model.GetDeclaredSymbol(((ClassDeclarationSyntax)mainMethod.Parent));
-            string qualifiedType = classSymbol.OriginalDefinition.ToString();
+            string qualifiedTypeName = classSymbol.OriginalDefinition.ToString();
 
             using (var ms = new MemoryStream()) {
                 var result = compilation.Emit(ms);
@@ -77,18 +81,29 @@ namespace CsRunner
                     foreach (var diagnostic in failures) {
                         Console.Error.WriteLine("{0}: {1}", diagnostic.Id, diagnostic.GetMessage());
                     }
+                    return;
                 }
                 else {
                     ms.Seek(0, SeekOrigin.Begin);
                     var assembly = Assembly.Load(ms.ToArray());
-                    var type = assembly.GetType(qualifiedType);
+                    var type = assembly.GetType(qualifiedTypeName);
 
                     object obj = Activator.CreateInstance(type);
-                    type.InvokeMember("Main",
-                        BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.InvokeMethod,
-                        null,
-                        obj,
-                        Array.Empty<string>());
+
+                    var method = type.GetMethod("Main",
+                        BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.InvokeMethod);
+
+                    object parms = null;
+                    int numparms = method.GetParameters().Length;
+                    if (numparms == 1) {
+                        parms = new object[] { new string[] { } };
+                    }
+                    else if (numparms > 0) {
+                        Console.Error.WriteLine("Main has too many parameters");
+                        return;
+                    }
+
+                    method.Invoke(null, (object[])parms);
                 }
             }
         }
