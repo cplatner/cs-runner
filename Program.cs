@@ -96,7 +96,7 @@ namespace CsRunner
                     object parms = null;
                     int numparms = method.GetParameters().Length;
                     if (numparms == 1) {
-                        parms = new object[] { new string[] { } };
+                        parms = new object[] { Array.Empty<string>() };
                     }
                     else if (numparms > 0) {
                         Console.Error.WriteLine("Main has too many parameters");
